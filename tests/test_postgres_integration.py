@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
@@ -95,6 +95,14 @@ def _race_two_inserts(engine, model, field_values):
             except IntegrityError:
                 db.rollback()
                 return "conflict"
+            except OperationalError as exc:
+                db.rollback()
+                # Concurrent PostgreSQL GiST exclusion checks can deadlock even
+                # though one insert is safely aborted. Treat only SQLSTATE 40P01
+                # as a conflict; surface all other database failures.
+                if getattr(exc.orig, "sqlstate", None) == "40P01":
+                    return "conflict"
+                raise
             finally:
                 db.close()
 
@@ -117,6 +125,8 @@ def test_postgresql_concurrent_property_reservations_are_serialized(pg_engine):
         "start_at": start, "expires_at": end, "deposit_amount": Decimal("0"), "currency": "EGP",
     })
     assert sorted(outcomes) == ["accepted", "conflict"]
+    with Session(pg_engine) as db:
+        assert db.query(m.PropertyReservation).filter_by(unit_id=data["property_unit_id"]).count() == 1
 
 
 def test_postgresql_concurrent_car_bookings_are_serialized(pg_engine):
@@ -129,6 +139,8 @@ def test_postgresql_concurrent_car_bookings_are_serialized(pg_engine):
         "currency": "EGP", "total_amount": Decimal("200"), "deposit_amount": Decimal("0"),
     })
     assert sorted(outcomes) == ["accepted", "conflict"]
+    with Session(pg_engine) as db:
+        assert db.query(m.CarBooking).filter_by(car_id=data["car_id"]).count() == 1
 
 
 def test_postgresql_concurrent_food_fulfilment_cannot_oversell(pg_engine):
