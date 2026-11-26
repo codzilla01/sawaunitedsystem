@@ -9,9 +9,8 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, func, inspect
+from sqlalchemy import or_, and_, func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from .database import Base, engine, get_db, SessionLocal
 from . import models as m
@@ -21,8 +20,15 @@ from .schemas import (LoginIn, PartyIn, LeadIn, OpportunityIn, ContractIn, Payme
 from .security import (verify_password, hash_password, issue_session, revoke_session,
                        get_current_user, set_session_cookie, clear_session_cookie, COOKIE_NAME)
 
+from .production import is_production, validate_production, protect_requests
+from .storage import save_document, load_document, delete_document
+
 APP_NAME = os.getenv("APP_NAME", "SAWA UNITED Business Management System")
-app = FastAPI(title=APP_NAME, version="1.0.0", description="Internal multi-business management platform API")
+app = FastAPI(title=APP_NAME, version="1.0.0", description="Internal multi-business management platform API",
+              docs_url=None if is_production() else "/docs",
+              redoc_url=None if is_production() else "/redoc",
+              openapi_url=None if is_production() else "/openapi.json")
+app.middleware("http")(protect_requests)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 UNIT_SEEDS = [
@@ -39,17 +45,16 @@ COUNTRY_SEEDS = [
     ("SA", "السعودية", "Saudi Arabia", "SAR", "Asia/Riyadh"),
 ]
 
-def startup():
-    if os.getenv("APP_ENV", "development").lower() == "production":
-        if os.getenv("SECRET_KEY", "").startswith("CHANGE_") or len(os.getenv("SECRET_KEY", "")) < 32:
-            raise RuntimeError("Set a strong SECRET_KEY before production startup")
-        if os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "") == "ChangeMeNow!2026" or len(os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")) < 12:
-            raise RuntimeError("Set a strong BOOTSTRAP_ADMIN_PASSWORD before first production startup")
-    if os.getenv("APP_ENV", "development").lower() == "production" and engine.dialect.name == "postgresql":
-        if not inspect(engine).has_table("business_units"):
-            raise RuntimeError("Production PostgreSQL schema is missing. Apply the reviewed migration before startup.")
+def startup(initialize=False):
+    validate_production()
+    if is_production():
+        missing = set(Base.metadata.tables) - set(inspect(engine).get_table_names())
+        if missing:
+            raise RuntimeError("Production schema incomplete. Apply reviewed migrations before startup.")
     else:
         Base.metadata.create_all(bind=engine)
+    if is_production() and not initialize:
+        return
     db = SessionLocal()
     try:
         for code, ar, en in UNIT_SEEDS:
@@ -60,9 +65,12 @@ def startup():
                 db.add(m.Country(code=code, name_ar=ar, name_en=en, default_currency=currency, timezone=tz))
         admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@sawa.local").lower()
         if not db.query(m.User).filter_by(email=admin_email).first():
+            password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMeNow!2026")
+            if is_production() and (len(password) < 16 or password == "ChangeMeNow!2026"):
+                raise RuntimeError("First production startup requires a unique admin password of at least 16 characters")
             user = m.User(email=admin_email,
                           full_name="مدير النظام",
-                          password_hash=hash_password(os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMeNow!2026")),
+                          password_hash=hash_password(password),
                           role="super_admin")
             db.add(user)
         db.commit()
@@ -84,6 +92,14 @@ def home(request: Request):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "sawa-united", "time": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/ready")
+def ready(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        raise HTTPException(503, "Database unavailable") from None
+    return {"status": "ready"}
 
 def unit_by_code(db: Session, code: str) -> m.BusinessUnit:
     unit = db.query(m.BusinessUnit).filter(m.BusinessUnit.code == code, m.BusinessUnit.active.is_(True)).first()
@@ -125,6 +141,8 @@ def new_number(prefix: str) -> str:
 
 @app.post("/api/v1/auth/login")
 def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+    from .login_limits import check_login_budget
+    check_login_budget(db, payload.email)
     user = db.query(m.User).filter(func.lower(m.User.email) == payload.email.lower()).first()
     if not user or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "البريد الإلكتروني أو كلمة المرور غير صحيحة")
@@ -583,19 +601,46 @@ ALLOWED_FILE_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 }
-MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_UPLOAD_BYTES = 3 * 1024 * 1024 if os.getenv("VERCEL") else 15 * 1024 * 1024
+
+def validate_document_link(db, user, entity_type, entity_id, unit):
+    if entity_type not in {"party", "contract"}:
+        raise HTTPException(422, "نوع الربط المدعوم: party أو contract")
+    model = m.Party if entity_type == "party" else m.Contract
+    entity = db.get(model, entity_id)
+    if not entity:
+        raise HTTPException(404, "السجل المرتبط غير موجود")
+    if entity_type == "party":
+        if unit:
+            ensure_party_access(db, user, entity_id, unit)
+    elif unit is None or entity.business_unit_id != unit.id:
+        raise HTTPException(403, "العقد غير مرتبط بالنشاط المحدد")
+
+
+@app.get("/api/v1/documents")
+def list_documents(db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+    query = db.query(m.Document)
+    if user.role not in {"super_admin", "group_manager"}:
+        query = query.filter(m.Document.business_unit_id.in_([x.business_unit_id for x in user.units]))
+    return [{"id": row.id, "filename": row.original_filename, "size_bytes": row.size_bytes,
+             "entity_type": row.entity_type, "entity_id": row.entity_id}
+            for row in query.order_by(m.Document.created_at.desc()).limit(250)]
+
 
 @app.post("/api/v1/documents", status_code=201)
-async def upload_document(file: UploadFile = File(...), entity_type: str = Form(...), entity_id: str = Form(...),
+def upload_document(file: UploadFile = File(...), entity_type: str = Form(...), entity_id: str = Form(...),
                           business_unit_code: str | None = Form(None), db: Session = Depends(get_db),
                           user: m.User = Depends(get_current_user)):
     unit = unit_by_code(db, business_unit_code) if business_unit_code else None
+    if not unit and user.role not in {"super_admin", "group_manager"}:
+        raise HTTPException(403, "يجب تحديد النشاط لرفع المستند")
     if unit: ensure_unit_access(user, unit)
+    validate_document_link(db, user, entity_type, entity_id, unit)
     if file.content_type not in ALLOWED_FILE_TYPES:
         raise HTTPException(415, "نوع الملف غير مسموح؛ الصيغ المدعومة PDF والصور وDOCX وXLSX")
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    content = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "الحد الأقصى لحجم الملف 15 ميجابايت")
+        raise HTTPException(413, "حجم الملف أكبر من الحد المسموح")
     if not content:
         raise HTTPException(422, "الملف فارغ")
     signatures = {
@@ -609,15 +654,24 @@ async def upload_document(file: UploadFile = File(...), entity_type: str = Form(
     if not signatures.get(file.content_type, False):
         raise HTTPException(415, "محتوى الملف لا يطابق نوعه المعلن")
     key = f"{uuid4().hex}.bin"
-    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-    path = UPLOAD_ROOT / key
-    path.write_bytes(content)
+    save_document(key, content)
     digest = hashlib.sha256(content).hexdigest()
     row = m.Document(original_filename=Path((file.filename or "document").replace("\\", "/")).name, storage_key=key,
         content_type=file.content_type, size_bytes=len(content), sha256=digest, entity_type=entity_type,
         entity_id=entity_id, business_unit_id=unit.id if unit else None, uploaded_by=user.id)
-    db.add(row); db.flush(); audit(db, user, "upload", "document", row.id, {"entity_type": entity_type, "entity_id": entity_id})
-    db.commit(); db.refresh(row)
+    try:
+        db.add(row)
+        db.flush()
+        audit(db, user, "upload", "document", row.id, {"entity_type": entity_type, "entity_id": entity_id})
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            delete_document(key)
+        except Exception:
+            pass  # Storage lifecycle reconciliation must remove unreferenced objects.
+        raise
+    db.refresh(row)
     return {"id": row.id, "filename": row.original_filename, "content_type": row.content_type,
             "size_bytes": row.size_bytes, "sha256": row.sha256, "entity_type": row.entity_type, "entity_id": row.entity_id}
 
@@ -625,11 +679,14 @@ async def upload_document(file: UploadFile = File(...), entity_type: str = Form(
 def download_document(document_id: str, db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
     row = db.get(m.Document, document_id)
     if not row: raise HTTPException(404, "المستند غير موجود")
+    if not row.business_unit_id and user.role not in {"super_admin", "group_manager"}:
+        raise HTTPException(403, "مستند مقيد للإدارة")
     if row.business_unit_id:
         ensure_unit_access(user, db.get(m.BusinessUnit, row.business_unit_id))
-    path = UPLOAD_ROOT / row.storage_key
-    if not path.is_file(): raise HTTPException(404, "ملف المستند غير متاح على التخزين")
-    return FileResponse(path, media_type=row.content_type, filename=row.original_filename)
+    from urllib.parse import quote
+    return Response(load_document(row.storage_key), media_type="application/octet-stream",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(row.original_filename, safe=""),
+                             "Cache-Control": "no-store"})
 
 # Tasks and audit
 @app.get("/api/v1/tasks")

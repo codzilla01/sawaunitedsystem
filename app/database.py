@@ -3,11 +3,14 @@ from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sawa_united.db")
 _engine_kwargs = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+if os.getenv("VERCEL") and not DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["poolclass"] = NullPool
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 if DATABASE_URL.startswith("sqlite"):

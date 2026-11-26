@@ -161,9 +161,9 @@ def test_party_scope_is_required_for_non_admin(client):
 
 
 
-def test_document_upload_is_private_and_download_requires_session(auth):
+def test_document_upload_is_private_and_download_requires_session(auth, party):
     upload = auth.post('/api/v1/documents', data={
-        'entity_type':'contract','entity_id':'example-contract-id','business_unit_code':'REAL_ESTATE'
+        'entity_type':'party','entity_id':party['id'],'business_unit_code':'REAL_ESTATE'
     }, files={'file':('test-contract.pdf', b'%PDF-1.4\n%test pdf bytes', 'application/pdf')})
     assert upload.status_code == 201, upload.text
     doc_id = upload.json()['id']

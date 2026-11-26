@@ -310,3 +310,9 @@ class Document(Base, TimestampMixin):
     entity_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     business_unit_id: Mapped[str | None] = mapped_column(ForeignKey("business_units.id"), index=True)
     uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+class LoginBudget(Base):
+    __tablename__ = "login_budgets"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
