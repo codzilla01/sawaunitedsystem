@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#101724" />
+  <title>SAWA UNITED | Business Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="login-screen" class="login-wrap hidden">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">S</div>
+      <div class="eyebrow">SAWA UNITED GROUP</div>
+      <h1>تسجيل الدخول</h1>
+      <p>منصة إدارة الأعمال والعقود والعمليات</p>
+      <label>البريد الإلكتروني<input name="email" type="email" value="admin@sawa.local" required autocomplete="username"></label>
+      <label>كلمة المرور<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="btn primary full" type="submit">دخول إلى النظام</button>
+      <div id="login-error" class="error-text"></div>
+    </form>
+  </div>
+  <div id="app-shell" class="shell hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark small">S</div>
+        <div><strong>SAWA UNITED</strong><span>BUSINESS SYSTEM</span></div>
+      </div>
+      <div class="side-caption">القائمة الرئيسية</div>
+      <nav id="nav-menu">
+        <button class="nav-item active" data-page="dashboard"><span>◫</span> لوحة الإدارة</button>
+        <button class="nav-item" data-page="parties"><span>♙</span> العملاء والشركاء</button>
+        <button class="nav-item" data-page="leads"><span>◎</span> العملاء المحتملون</button>
+        <button class="nav-item" data-page="opportunities"><span>⌁</span> الفرص التجارية</button>
+        <button class="nav-item" data-page="contracts"><span>▤</span> العقود والاتفاقيات</button>
+        <div class="side-caption section-label">وحدات الأعمال</div>
+        <button class="nav-item" data-page="realestate"><span>⌂</span> الاستثمار العقاري</button>
+        <button class="nav-item" data-page="food"><span>◇</span> Sawa Food</button>
+        <button class="nav-item" data-page="cars"><span>▰</span> Mashary Cars</button>
+        <div class="side-caption section-label">الإدارة والتشغيل</div>
+        <button class="nav-item" data-page="finance"><span>◈</span> المالية والتحصيل</button>
+        <button class="nav-item" data-page="tasks"><span>✓</span> المهام والمتابعات</button>
+        <button class="nav-item" data-page="users" id="users-nav"><span>♜</span> المستخدمون والصلاحيات</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="secure-note"><span class="live-dot"></span><div><b>بيئة تشغيل داخلية</b><small>Access controlled</small></div></div>
+        <button id="logout-btn" class="logout-btn">↪ تسجيل الخروج</button>
+      </div>
+    </aside>
+    <main class="main-area">
+      <header class="topbar">
+        <div class="crumb"><span>SAWA UNITED</span><b>/</b><strong id="page-crumb">لوحة الإدارة</strong></div>
+        <div class="top-actions">
+          <span class="env-chip"><i></i> SYSTEM ONLINE</span>
+          <div class="user-chip"><div class="avatar">SU</div><div><b id="user-name">مدير النظام</b><small id="user-role">Super Admin</small></div></div>
+        </div>
+      </header>
+      <section id="page-content" class="content-area"></section>
+      <footer class="app-footer"><span>SAWA UNITED Business Management System</span><span>Internal Operations Platform · v1.0 MVP</span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
