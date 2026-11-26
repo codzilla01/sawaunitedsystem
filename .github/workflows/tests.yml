@@ -1,5 +1,7 @@
 name: Application checks
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -22,7 +24,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock
       - run: pip install -r requirements.lock
-      - run: python -m pytest -q
+      - name: Generate an ephemeral CI-only MFA encryption key
+        run: echo "MFA_ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+      - name: Unit and API tests (SQLite)
+        run: python -m pytest -q
       - name: Apply initial PostgreSQL migration
         env:
           PGPASSWORD: ci-only-password
@@ -31,7 +36,24 @@ jobs:
         env:
           PGPASSWORD: ci-only-password
         run: psql -h localhost -U sawa_test -d sawa_test -v ON_ERROR_STOP=1 --single-transaction -f migrations/0002_login_budgets.sql
-      - name: Production startup smoke test
+      - name: Apply MFA and verified-session migration
+        env:
+          PGPASSWORD: ci-only-password
+        run: psql -h localhost -U sawa_test -d sawa_test -v ON_ERROR_STOP=1 --single-transaction -f migrations/0003_mfa_sessions.sql
+      - name: PostgreSQL migration, concurrency, stock and permission tests
+        env:
+          PGPASSWORD: ci-only-password
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: sawa_test
+          PGDATABASE: sawa_test
+          APP_ENV: development
+          DATABASE_URL: postgresql+psycopg://sawa_test:ci-only-password@localhost:5432/sawa_test
+          TEST_POSTGRES_URL: postgresql+psycopg://sawa_test:ci-only-password@localhost:5432/sawa_test
+          BOOTSTRAP_ADMIN_EMAIL: admin@ci.example
+          BOOTSTRAP_ADMIN_PASSWORD: ci-only-bootstrap-password-long
+        run: python -m pytest -q tests/test_postgres_integration.py
+      - name: Production startup smoke test against migrated PostgreSQL
         env:
           APP_ENV: production
           DATABASE_URL: postgresql+psycopg://sawa_test:ci-only-password@localhost:5432/sawa_test
@@ -40,4 +62,22 @@ jobs:
           BOOTSTRAP_ADMIN_PASSWORD: ci-only-admin-password-not-for-deployment
           COOKIE_SECURE: 'true'
           PUBLIC_ORIGIN: https://ci.example
+          S3_BUCKET: ci-private-documents
+          S3_REGION: us-east-1
+          DOCUMENT_SCANNER_URL: https://scanner.ci.example/scan
+          DOCUMENT_SCANNER_TOKEN: ci-only-scanner-token
         run: python -c "from app.main import startup; startup(initialize=True); startup()"
+      - name: Backup and restore PostgreSQL into a disposable database
+        env:
+          PGPASSWORD: ci-only-password
+        run: |
+          set -euo pipefail
+          pg_dump -h localhost -U sawa_test -d sawa_test --format=custom --no-owner --no-acl --file=/tmp/sawa-ci.dump
+          pg_restore --list /tmp/sawa-ci.dump >/dev/null
+          createdb -h localhost -U sawa_test sawa_restore_ci
+          pg_restore -h localhost -U sawa_test -d sawa_restore_ci --exit-on-error --single-transaction --no-owner --no-acl /tmp/sawa-ci.dump
+          source_count=$(psql -h localhost -U sawa_test -d sawa_test -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
+          restored_count=$(psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
+          test "$source_count" = "$restored_count"
+          psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM users" | grep -Eq '^[1-9][0-9]*$'
+          echo "PostgreSQL backup restore verified ($restored_count tables)."

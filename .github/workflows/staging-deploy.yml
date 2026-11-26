@@ -1,0 +1,78 @@
+name: Deploy Vercel staging
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: sawa-united-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate staging secrets
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_STAGING_DOMAIN: ${{ secrets.VERCEL_STAGING_DOMAIN }}
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN"
+          test -n "$VERCEL_ORG_ID"
+          test -n "$VERCEL_PROJECT_ID"
+          test -n "$VERCEL_STAGING_DOMAIN"
+          test -n "$STAGING_BASE_URL"
+          python - "$STAGING_BASE_URL" "$VERCEL_STAGING_DOMAIN" <<'PY'
+          import sys
+          from urllib.parse import urlsplit
+          base, domain = sys.argv[1:]
+          parsed = urlsplit(base)
+          if (not domain or any(c in domain for c in '/?#@')
+                  or parsed.scheme != 'https' or not parsed.hostname
+                  or parsed.hostname.lower() != domain.lower()
+                  or parsed.username or parsed.password
+                  or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+              raise SystemExit('STAGING_BASE_URL must be the HTTPS origin for VERCEL_STAGING_DOMAIN.')
+          PY
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@67.0.0
+      - name: Pull Preview environment and build
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          vercel build --token="$VERCEL_TOKEN"
+      - name: Deploy and alias staging
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_STAGING_DOMAIN: ${{ secrets.VERCEL_STAGING_DOMAIN }}
+        run: |
+          set -euo pipefail
+          vercel deploy --prebuilt --target=preview --yes --token="$VERCEL_TOKEN" 2>&1 | tee /tmp/vercel-deploy.log
+          deployment_url=$(grep -Eo 'https://[^[:space:]]+\.vercel\.app' /tmp/vercel-deploy.log | tail -n 1 || true)
+          if [ -z "$deployment_url" ]; then
+            echo "Could not identify the deployment URL from Vercel CLI output." >&2
+            exit 1
+          fi
+          vercel alias set "$deployment_url" "$VERCEL_STAGING_DOMAIN" --token="$VERCEL_TOKEN"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+      - name: Verify staged deployment
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+        run: python scripts/check_deployment.py "$STAGING_BASE_URL"

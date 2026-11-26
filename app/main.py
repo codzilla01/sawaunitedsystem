@@ -14,13 +14,15 @@ from sqlalchemy import or_, and_, func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from .database import Base, engine, get_db, SessionLocal
 from . import models as m
-from .schemas import (LoginIn, PartyIn, LeadIn, OpportunityIn, ContractIn, PaymentIn, CountryIn, BusinessUnitIn, PasswordResetIn,
+from .schemas import (LoginIn, MfaCodeIn, PartyIn, LeadIn, OpportunityIn, ContractIn, PaymentIn, CountryIn, BusinessUnitIn, PasswordResetIn,
                       ProjectIn, PropertyUnitIn, PropertyReservationIn, FoodProductIn,
                       FoodOrderIn, CarIn, CarBookingIn, MaintenanceIn, TaskIn, UserIn)
 from .security import (verify_password, hash_password, issue_session, revoke_session,
-                       get_current_user, set_session_cookie, clear_session_cookie, COOKIE_NAME)
+                       get_current_user, set_session_cookie, clear_session_cookie, COOKIE_NAME, session_token_hash)
+from .mfa import decrypt_secret, encrypt_secret, is_mfa_required, new_secret, provisioning_uri, verify_totp
 
 from .production import is_production, validate_production, protect_requests
+from .observability import request_observability
 from .storage import save_document, load_document, delete_document
 
 APP_NAME = os.getenv("APP_NAME", "SAWA UNITED Business Management System")
@@ -29,6 +31,7 @@ app = FastAPI(title=APP_NAME, version="1.0.0", description="Internal multi-busin
               redoc_url=None if is_production() else "/redoc",
               openapi_url=None if is_production() else "/openapi.json")
 app.middleware("http")(protect_requests)
+app.middleware("http")(request_observability)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 UNIT_SEEDS = [
@@ -45,14 +48,54 @@ COUNTRY_SEEDS = [
     ("SA", "السعودية", "Saudi Arabia", "SAR", "Asia/Riyadh"),
 ]
 
+def _upgrade_local_mfa_columns():
+    """Backfill only the new MFA columns for pre-existing local SQLite databases."""
+    if engine.dialect.name != "sqlite":
+        return
+    additions = {
+        "users": {
+            "mfa_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+            "mfa_secret_encrypted": "VARCHAR(500)",
+            "mfa_pending_secret_encrypted": "VARCHAR(500)",
+            "mfa_last_counter": "INTEGER NOT NULL DEFAULT -1",
+        },
+        "session_tokens": {"mfa_verified": "BOOLEAN NOT NULL DEFAULT 0"},
+    }
+    with engine.begin() as connection:
+        schema = inspect(connection)
+        tables = set(schema.get_table_names())
+        for table_name, columns in additions.items():
+            if table_name not in tables:
+                continue
+            present = {column["name"] for column in schema.get_columns(table_name)}
+            for column_name, definition in columns.items():
+                if column_name not in present:
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {definition}'
+                    )
+
+
 def startup(initialize=False):
     validate_production()
     if is_production():
-        missing = set(Base.metadata.tables) - set(inspect(engine).get_table_names())
-        if missing:
-            raise RuntimeError("Production schema incomplete. Apply reviewed migrations before startup.")
+        schema = inspect(engine)
+        existing_tables = set(schema.get_table_names())
+        missing_tables = set(Base.metadata.tables) - existing_tables
+        missing_columns = {}
+        for table_name, table in Base.metadata.tables.items():
+            if table_name in existing_tables:
+                actual = {column["name"] for column in schema.get_columns(table_name)}
+                absent = {column.name for column in table.columns} - actual
+                if absent:
+                    missing_columns[table_name] = sorted(absent)
+        if missing_tables or missing_columns:
+            raise RuntimeError(
+                "Production schema incomplete. Apply reviewed migrations before startup. "
+                f"Missing tables: {sorted(missing_tables)}; missing columns: {missing_columns}"
+            )
     else:
         Base.metadata.create_all(bind=engine)
+        _upgrade_local_mfa_columns()
     if is_production() and not initialize:
         return
     db = SessionLocal()
@@ -143,14 +186,81 @@ def new_number(prefix: str) -> str:
 def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
     from .login_limits import check_login_budget
     check_login_budget(db, payload.email)
-    user = db.query(m.User).filter(func.lower(m.User.email) == payload.email.lower()).first()
+    user = db.query(m.User).filter(func.lower(m.User.email) == payload.email.lower()).with_for_update().first()
     if not user or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "البريد الإلكتروني أو كلمة المرور غير صحيحة")
-    token = issue_session(db, user)
+
+    mfa_verified = False
+    if user.mfa_enabled:
+        if not user.mfa_secret_encrypted:
+            raise HTTPException(503, "إعداد المصادقة الثنائية غير مكتمل؛ تواصل مع مسؤول النظام")
+        try:
+            secret = decrypt_secret(user.mfa_secret_encrypted)
+        except RuntimeError:
+            raise HTTPException(503, "تعذر التحقق بالمصادقة الثنائية؛ تواصل مع مسؤول النظام") from None
+        counter = verify_totp(secret, payload.mfa_code, last_counter=user.mfa_last_counter)
+        if counter is None:
+            raise HTTPException(401, "رمز المصادقة الثنائية غير صحيح أو مستخدم سابقًا")
+        user.mfa_last_counter = counter
+        mfa_verified = True
+
+    setup_required = is_mfa_required(user.role) and not user.mfa_enabled
+    token = issue_session(db, user, mfa_verified=mfa_verified)
     set_session_cookie(response, token)
-    audit(db, user, "login", "user", user.id)
+    audit(db, user, "login", "user", user.id, {"mfa_verified": mfa_verified})
     db.commit()
-    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role}
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role,
+            "mfa_setup_required": setup_required}
+
+@app.get("/api/v1/auth/mfa/status")
+def mfa_status(user: m.User = Depends(get_current_user)):
+    return {"enabled": user.mfa_enabled, "required": is_mfa_required(user.role)}
+
+@app.post("/api/v1/auth/mfa/setup")
+def mfa_setup(db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+    locked_user = (db.query(m.User).filter(m.User.id == user.id)
+                   .with_for_update().populate_existing().first())
+    if not locked_user:
+        raise HTTPException(401, "الحساب غير موجود؛ سجل الدخول مجددًا")
+    if locked_user.mfa_enabled:
+        raise HTTPException(409, "المصادقة الثنائية مفعلة بالفعل")
+    secret = new_secret()
+    locked_user.mfa_pending_secret_encrypted = encrypt_secret(secret)
+    audit(db, locked_user, "mfa_setup_started", "user", locked_user.id)
+    db.commit()
+    return {"secret": secret, "otpauth_uri": provisioning_uri(locked_user.email, secret),
+            "issuer": "SAWA UNITED", "digits": 6, "period_seconds": 30}
+
+@app.post("/api/v1/auth/mfa/confirm")
+def mfa_confirm(payload: MfaCodeIn, request: Request, db: Session = Depends(get_db),
+                user: m.User = Depends(get_current_user)):
+    from .login_limits import check_login_budget
+    check_login_budget(db, user.email)
+    locked_user = (db.query(m.User).filter(m.User.id == user.id)
+                   .with_for_update().populate_existing().first())
+    if not locked_user or not locked_user.mfa_pending_secret_encrypted or locked_user.mfa_enabled:
+        raise HTTPException(409, "ابدأ إعداد المصادقة الثنائية أولًا")
+    try:
+        secret = decrypt_secret(locked_user.mfa_pending_secret_encrypted)
+    except RuntimeError:
+        raise HTTPException(503, "تعذر استعادة إعداد المصادقة؛ ابدأ الإعداد من جديد") from None
+    counter = verify_totp(secret, payload.code, last_counter=locked_user.mfa_last_counter)
+    if counter is None:
+        raise HTTPException(422, "رمز التحقق غير صحيح أو منتهي الصلاحية")
+    locked_user.mfa_secret_encrypted = locked_user.mfa_pending_secret_encrypted
+    locked_user.mfa_pending_secret_encrypted = None
+    locked_user.mfa_enabled = True
+    locked_user.mfa_last_counter = counter
+
+    token = request.cookies.get(COOKIE_NAME)
+    session_row = db.query(m.SessionToken).filter_by(token_hash=session_token_hash(token or ""), revoked=False).first()
+    if not session_row:
+        db.rollback()
+        raise HTTPException(401, "انتهت الجلسة؛ سجل الدخول مجددًا")
+    session_row.mfa_verified = True
+    audit(db, locked_user, "mfa_enabled", "user", locked_user.id)
+    db.commit()
+    return {"ok": True, "mfa_enabled": True}
 
 @app.post("/api/v1/auth/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
@@ -199,7 +309,8 @@ def list_users(db: Session = Depends(get_db), user: m.User = Depends(get_current
     require_any_role(user, {"super_admin", "group_manager"})
     rows = db.query(m.User).order_by(m.User.created_at.desc()).all()
     return [{"id": x.id, "email": x.email, "full_name": x.full_name, "role": x.role,
-             "active": x.active, "units": [{"business_unit_id": z.business_unit_id} for z in x.units],
+             "active": x.active, "mfa_enabled": x.mfa_enabled,
+             "units": [{"business_unit_id": z.business_unit_id} for z in x.units],
              "created_at": x.created_at} for x in rows]
 
 @app.post("/api/v1/users", status_code=201)
@@ -229,9 +340,13 @@ def reset_user_password(user_id: str, payload: PasswordResetIn, db: Session = De
     target = db.get(m.User, user_id)
     if not target: raise HTTPException(404, "المستخدم غير موجود")
     target.password_hash = hash_password(payload.password)
+    target.mfa_enabled = False
+    target.mfa_secret_encrypted = None
+    target.mfa_pending_secret_encrypted = None
+    target.mfa_last_counter = -1
     for session in db.query(m.SessionToken).filter(m.SessionToken.user_id == target.id).all():
         session.revoked = True
-    audit(db, user, "reset_password", "user", target.id)
+    audit(db, user, "reset_password", "user", target.id, {"mfa_reset": True})
     db.commit()
     return {"ok": True, "message": "تم تغيير كلمة المرور وإبطال الجلسات السابقة"}
 
@@ -517,18 +632,25 @@ def list_food_orders(db: Session = Depends(get_db), user: m.User = Depends(get_c
 def fulfill_food_order(order_id: str, db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
     require_any_role(user, {"super_admin", "group_manager", "business_manager", "operations"})
     ensure_unit_access(user, unit_by_code(db, "SAWA_FOOD"))
-    order = db.get(m.FoodOrder, order_id)
+    # Serialize duplicate fulfilment and concurrent orders against the same inventory row.
+    order = db.query(m.FoodOrder).filter(m.FoodOrder.id == order_id).with_for_update().first()
     if not order: raise HTTPException(404, "الطلب غير موجود")
     if order.status != "draft": raise HTTPException(409, "يمكن تنفيذ الطلبات المسودة فقط")
-    lines = db.query(m.FoodOrderLine).filter_by(order_id=order.id).all()
+    lines = db.query(m.FoodOrderLine).filter_by(order_id=order.id).order_by(m.FoodOrderLine.product_id).all()
     # Brokerage never changes company-owned inventory. Direct model consumes inventory on fulfillment.
     if order.business_model == "direct":
+        product_ids = sorted({line.product_id for line in lines})
+        products = db.query(m.FoodProduct).filter(m.FoodProduct.id.in_(product_ids)) \
+            .order_by(m.FoodProduct.id).with_for_update().all()
+        products_by_id = {product.id: product for product in products}
         for line in lines:
-            product = db.get(m.FoodProduct, line.product_id)
+            product = products_by_id.get(line.product_id)
+            if not product:
+                raise HTTPException(409, "تعذر العثور على صنف في الطلب")
             if product.stock_quantity < line.quantity:
                 raise HTTPException(409, f"المخزون غير كافٍ للصنف {product.name}")
         for line in lines:
-            product = db.get(m.FoodProduct, line.product_id)
+            product = products_by_id[line.product_id]
             product.stock_quantity -= line.quantity
             db.add(m.StockMovement(product_id=product.id, order_id=order.id, movement_type="out", quantity=line.quantity))
     order.status = "fulfilled"; audit(db, user, "fulfill", "food_order", order.id, {"business_model": order.business_model})

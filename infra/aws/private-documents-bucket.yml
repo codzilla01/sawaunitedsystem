@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private, encrypted and versioned SAWA UNITED document bucket for staging or production.
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique bucket name. Use a distinct name for staging and production.
+    MinLength: 3
+    MaxLength: 63
+  AppIamUserName:
+    Type: String
+    Description: Existing dedicated IAM user name for the app, with no other attached S3 permissions.
+Resources:
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Application
+          Value: sawa-united-system
+        - Key: DataClass
+          Value: confidential-documents
+
+  DocumentsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DocumentsBucket.Arn
+              - !Sub '${DocumentsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: RequireServerSideEncryptionOnWrites
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${DocumentsBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: AES256
+
+  AppBucketAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Least-privilege document object access for the SAWA application.
+      Users:
+        - !Ref AppIamUserName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ManageApplicationDocuments
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub '${DocumentsBucket.Arn}/*'
+Outputs:
+  BucketName:
+    Value: !Ref DocumentsBucket
+  BucketArn:
+    Value: !GetAtt DocumentsBucket.Arn
+  ObjectArn:
+    Value: !Sub '${DocumentsBucket.Arn}/*'

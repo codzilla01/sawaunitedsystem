@@ -1,4 +1,13 @@
+import os
+import tempfile
 import pytest
+
+# Keep the app's lifespan/bootstrap database isolated from any developer data.
+if "DATABASE_URL" not in os.environ and not os.getenv("TEST_POSTGRES_URL"):
+    fd, _test_db_path = tempfile.mkstemp(prefix="sawa-pytest-", suffix=".db")
+    os.close(fd)
+    os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path}"
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

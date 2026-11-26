@@ -8,6 +8,10 @@ class ORMModel(BaseModel):
 class LoginIn(BaseModel):
     email: str
     password: str
+    mfa_code: str | None = None
+
+class MfaCodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
 
 class PartyIn(BaseModel):
     party_type: str = "person"

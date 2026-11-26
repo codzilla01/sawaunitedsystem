@@ -1,4 +1,4 @@
-"""Run once from a trusted shell AFTER applying both reviewed SQL migrations.
+"""Run once from a trusted shell AFTER applying all reviewed SQL migrations.
 
 python -m scripts.initialize_production
 Uses environment variables; never prints secrets. Safe to repeat for the same

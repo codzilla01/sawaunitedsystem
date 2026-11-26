@@ -45,9 +45,9 @@ erDiagram
 |---|---|---|
 | `business_units` | `id`, `code`, `name_ar`, `name_en`, `active` | العلامات/وحدات الأعمال |
 | `countries` | `code`, `default_currency`, `timezone` | الدول والإعدادات المحلية |
-| `users` | `id`, `email`, `password_hash`, `role`, `active` | حسابات الموظفين |
+| `users` | `id`, `email`, `password_hash`, `role`, `active`, `mfa_enabled`, `mfa_secret_encrypted`, `mfa_pending_secret_encrypted`, `mfa_last_counter` | حسابات الموظفين؛ أسرار TOTP مشفرة بمفتاح مستقل ولا تحفظ نصًا صريحًا |
 | `user_business_units` | PK مركب: `user_id`, `business_unit_id` | نطاق النشاط للمستخدم |
-| `session_tokens` | `token_hash`, `expires_at`, `revoked` | جلسات مصادقة قابلة للإبطال |
+| `session_tokens` | `token_hash`, `expires_at`, `revoked`, `mfa_verified` | جلسات مصادقة قابلة للإبطال؛ حالة إثبات TOTP للجلسة |
 | `parties` | `display_name`, `party_type`, `phone`, `email`, `country_code`, `roles` | قاعدة موحدة للعملاء والأطراف |
 | `party_business_units` | PK مركب: `party_id`, `business_unit_id` | ربط الطرف بالنشاط المسموح |
 | `leads` | `party_id`, `business_unit_id`, `source`, `status` | استفسارات أولية |

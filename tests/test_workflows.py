@@ -135,6 +135,9 @@ def test_user_response_never_exposes_password_hash(auth):
     assert r.status_code == 200
     assert r.json()
     assert 'password_hash' not in r.json()[0]
+    assert 'mfa_secret_encrypted' not in r.json()[0]
+    assert 'mfa_pending_secret_encrypted' not in r.json()[0]
+    assert 'mfa_last_counter' not in r.json()[0]
 
 
 def test_party_scope_is_required_for_non_admin(client):

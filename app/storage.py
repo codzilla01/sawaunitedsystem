@@ -25,12 +25,20 @@ def scan_document(content: bytes):
             response = client.post(os.environ["DOCUMENT_SCANNER_URL"], content=content,
                                    headers={"Authorization": "Bearer " + os.environ["DOCUMENT_SCANNER_TOKEN"],
                                             "Content-Type": "application/octet-stream"})
-        if response.status_code != 200 or response.json().get("clean") is not True:
-            raise HTTPException(422, "تعذر اعتماد سلامة المستند")
+        if response.status_code != 200:
+            raise HTTPException(503, "خدمة فحص المستندات غير متاحة")
+        verdict = response.json()
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(503, "خدمة فحص المستندات غير متاحة") from None
+    if not isinstance(verdict, dict):
+        raise HTTPException(503, "خدمة فحص المستندات أعادت حكمًا غير صالح")
+    clean = verdict.get("clean")
+    if clean is not True and clean is not False:
+        raise HTTPException(503, "خدمة فحص المستندات أعادت حكمًا غير صالح")
+    if clean is False:
+        raise HTTPException(422, "تعذر اعتماد سلامة المستند")
 
 
 def save_document(key: str, content: bytes):
