@@ -85,12 +85,26 @@ jobs:
           PGPASSWORD: ci-only-password
         run: |
           set -euo pipefail
+          service_id=$(docker ps --filter ancestor=postgres:16-alpine --format '{{.ID}}' | head -n 1)
+          if [[ -z "$service_id" ]]; then
+            echo "::error::Could not find the PostgreSQL 16 service container for version-matched backup tools."
+            exit 1
+          fi
+          service_image=$(docker inspect --format '{{.Config.Image}}' "$service_id")
+          pg_dump_version=$(docker exec "$service_id" pg_dump --version)
+          pg_restore_version=$(docker exec "$service_id" pg_restore --version)
+          server_version=$(docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" psql -h localhost -U sawa_test -d sawa_test -Atqc "SHOW server_version_num")
+          echo "Backup/restore compatibility: image=$service_image, $pg_dump_version, $pg_restore_version, server=$server_version"
+          if [[ "$pg_dump_version" != *" 16."* || "$pg_restore_version" != *" 16."* || "$server_version" != 16* ]]; then
+            echo "::error::Expected PostgreSQL 16 client/server tools, got image=$service_image, dump=$pg_dump_version, restore=$pg_restore_version, server=$server_version"
+            exit 1
+          fi
           check_command() {
             local label="$1"
             shift
             if ! "$@" > /tmp/sawa-ci-command.log 2>&1; then
               cat /tmp/sawa-ci-command.log
-              echo "::error title=PostgreSQL backup/restore::$label failed"
+              echo "::error title=PostgreSQL backup/restore::$label failed (image=$service_image; dump=$pg_dump_version; restore=$pg_restore_version; server=$server_version)"
               while IFS= read -r line; do
                 printf '::error::%s\n' "${line//'%'/'%25'}"
               done < <(tail -n 12 /tmp/sawa-ci-command.log)
@@ -98,19 +112,19 @@ jobs:
             fi
             cat /tmp/sawa-ci-command.log
           }
-          check_command pg_dump pg_dump -h localhost -U sawa_test -d sawa_test --format=custom --no-owner --no-acl --file=/tmp/sawa-ci.dump
-          check_command 'pg_restore --list' pg_restore --list /tmp/sawa-ci.dump
-          check_command createdb createdb -h localhost -U sawa_test sawa_restore_ci
-          check_command pg_restore pg_restore -h localhost -U sawa_test -d sawa_restore_ci --exit-on-error --single-transaction --no-owner --no-acl /tmp/sawa-ci.dump
-          source_count=$(psql -h localhost -U sawa_test -d sawa_test -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
-          restored_count=$(psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
+          check_command pg_dump docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" pg_dump -h localhost -U sawa_test -d sawa_test --format=custom --no-owner --no-acl --file=/tmp/sawa-ci.dump
+          check_command 'pg_restore --list' docker exec "$service_id" pg_restore --list /tmp/sawa-ci.dump
+          check_command createdb docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" createdb -h localhost -U sawa_test sawa_restore_ci
+          check_command pg_restore docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" pg_restore -h localhost -U sawa_test -d sawa_restore_ci --exit-on-error --single-transaction --no-owner --no-acl /tmp/sawa-ci.dump
+          source_count=$(docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" psql -h localhost -U sawa_test -d sawa_test -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
+          restored_count=$(docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
           if [[ "$source_count" != "$restored_count" ]]; then
             echo "::error::Restored table count mismatch: source=$source_count restored=$restored_count"
             exit 1
           fi
-          restored_users=$(psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM users")
+          restored_users=$(docker exec -e PGPASSWORD="$PGPASSWORD" "$service_id" psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM users")
           if ! [[ "$restored_users" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Restored users table is empty or invalid (count=$restored_users)."
             exit 1
           fi
-          echo "PostgreSQL backup restore verified ($restored_count tables, $restored_users users)."
+          echo "PostgreSQL backup restore verified ($restored_count tables, $restored_users users) with PostgreSQL 16 client tools."
