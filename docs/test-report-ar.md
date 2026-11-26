@@ -4,7 +4,7 @@
 
 آخر تشغيل لهذه النسخة من المستودع: **45 passed, 5 skipped, 1 warning** على Python 3.11 وSQLite. الاختبارات الخمسة المتخطاة هي اختبارات PostgreSQL الفعلية في `tests/test_postgres_integration.py`؛ تحتاج `TEST_POSTGRES_URL` بعد تطبيق migrations. ظهر تحذير deprecation من `starlette.testclient` مع httpx، ولم يمنع النجاح. فحص `python -m compileall -q app api scripts tests` نجح.
 
-> **هذا ليس تقرير قبول PostgreSQL أو staging.** لا يتوفر Docker أو PostgreSQL محليًا. أول تشغيل لـGitHub Actions على `212ac53` نجح في اختبارات SQLite وتطبيق migrations `0001`–`0003`، لكنه فشل في خطوة اختبارات PostgreSQL؛ أضيفت الآن مخرجات فشل كتعليقات تشخيصية لإعادة التشغيل. فشل كذلك فحص Vercel Preview التلقائي، ولا تعتبر أي من الحالتين نشرًا ناجحًا.
+> **هذا ليس تقرير قبول PostgreSQL أو staging.** لا يتوفر Docker أو PostgreSQL محليًا. أول تشغيل لـGitHub Actions على `212ac53` نجح في اختبارات SQLite وتطبيق migrations `0001`–`0003`، لكنه كشف deadlock SQLSTATE `40P01` في اختبار الإدخال المتزامن المباشر لحجوزات السيارات. عُدّل الاختبار لاحتساب deadlock الآمن تعارضًا، والتحقق من بقاء سجل واحد؛ نتيجة إعادة التشغيل على `eaad72d` ما زالت قيد التنفيذ. فشل كذلك فحص Vercel Preview التلقائي للـcommits المنشورة، ولا تعتبر أي من الحالتين نشرًا ناجحًا.
 
 ## نطاق الاختبارات المضافة/الموجودة
 
