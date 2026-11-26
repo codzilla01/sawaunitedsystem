@@ -85,12 +85,32 @@ jobs:
           PGPASSWORD: ci-only-password
         run: |
           set -euo pipefail
-          pg_dump -h localhost -U sawa_test -d sawa_test --format=custom --no-owner --no-acl --file=/tmp/sawa-ci.dump
-          pg_restore --list /tmp/sawa-ci.dump >/dev/null
-          createdb -h localhost -U sawa_test sawa_restore_ci
-          pg_restore -h localhost -U sawa_test -d sawa_restore_ci --exit-on-error --single-transaction --no-owner --no-acl /tmp/sawa-ci.dump
+          check_command() {
+            local label="$1"
+            shift
+            if ! "$@" > /tmp/sawa-ci-command.log 2>&1; then
+              cat /tmp/sawa-ci-command.log
+              echo "::error title=PostgreSQL backup/restore::$label failed"
+              while IFS= read -r line; do
+                printf '::error::%s\n' "${line//'%'/'%25'}"
+              done < <(tail -n 12 /tmp/sawa-ci-command.log)
+              exit 1
+            fi
+            cat /tmp/sawa-ci-command.log
+          }
+          check_command pg_dump pg_dump -h localhost -U sawa_test -d sawa_test --format=custom --no-owner --no-acl --file=/tmp/sawa-ci.dump
+          check_command 'pg_restore --list' pg_restore --list /tmp/sawa-ci.dump
+          check_command createdb createdb -h localhost -U sawa_test sawa_restore_ci
+          check_command pg_restore pg_restore -h localhost -U sawa_test -d sawa_restore_ci --exit-on-error --single-transaction --no-owner --no-acl /tmp/sawa-ci.dump
           source_count=$(psql -h localhost -U sawa_test -d sawa_test -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
           restored_count=$(psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
-          test "$source_count" = "$restored_count"
-          psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM users" | grep -Eq '^[1-9][0-9]*$'
-          echo "PostgreSQL backup restore verified ($restored_count tables)."
+          if [[ "$source_count" != "$restored_count" ]]; then
+            echo "::error::Restored table count mismatch: source=$source_count restored=$restored_count"
+            exit 1
+          fi
+          restored_users=$(psql -h localhost -U sawa_test -d sawa_restore_ci -Atqc "SELECT count(*) FROM users")
+          if ! [[ "$restored_users" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Restored users table is empty or invalid (count=$restored_users)."
+            exit 1
+          fi
+          echo "PostgreSQL backup restore verified ($restored_count tables, $restored_users users)."
