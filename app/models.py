@@ -40,6 +40,10 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(String(300), nullable=False)
     role: Mapped[str] = mapped_column(String(40), default="sales", nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_secret_encrypted: Mapped[str | None] = mapped_column(String(500))
+    mfa_pending_secret_encrypted: Mapped[str | None] = mapped_column(String(500))
+    mfa_last_counter: Mapped[int] = mapped_column(Integer, default=-1, nullable=False)
     units: Mapped[list[UserBusinessUnit]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 class UserBusinessUnit(Base):
@@ -55,6 +59,7 @@ class SessionToken(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 class Party(Base, TimestampMixin):

@@ -21,14 +21,17 @@
 |---|---|---|---|
 | POST | `/auth/login` | Login and issue HttpOnly session cookie | Public |
 | POST | `/auth/logout` | Revoke current session | Authenticated |
-| GET | `/auth/me` | Current user and scope | Authenticated |
+| GET | `/auth/me` | Current user and scope | Authenticated; privileged production accounts must complete MFA |
+| GET | `/auth/mfa/status` | MFA enabled/required state | Authenticated |
+| POST | `/auth/mfa/setup` | Generate one-time enrollment secret and `otpauth://` URI | Authenticated self-service |
+| POST | `/auth/mfa/confirm` | Validate first TOTP and complete setup | Authenticated self-service |
 | GET | `/reference/business-units` | List visible activities | Authenticated |
 | POST | `/reference/business-units` | Add brand/business unit | Super Admin |
 | GET | `/reference/countries` | List enabled countries | Authenticated |
 | POST | `/reference/countries` | Add country/currency/timezone | Super Admin |
 | GET | `/users` | User directory without credential hashes | Super Admin / Group Manager |
 | POST | `/users` | Create scoped user | Super Admin |
-| POST | `/users/{id}/reset-password` | Reset password and revoke sessions | Super Admin |
+| POST | `/users/{id}/reset-password` | Reset password, clear MFA enrollment, revoke sessions, and require re-enrollment when policy applies | Super Admin |
 | POST | `/users/{id}/deactivate` | Deactivate account and revoke sessions | Super Admin |
 | GET | `/dashboard` | Aggregated accessible KPIs | Authenticated |
 
@@ -38,10 +41,10 @@
 POST /api/v1/auth/login
 Content-Type: application/json
 
-{"email":"admin@example.com","password":"<secure-password>"}
+{"email":"admin@example.com","password":"<secure-password>","mfa_code":"123456"}
 ```
 
-Successful response includes `id`, `email`, `full_name`, `role`; session is set as an HttpOnly cookie. Passwords are never returned.
+`mfa_code` is optional only when MFA is not enrolled. In production, privileged roles (`super_admin`, `group_manager`, `business_manager`, `contract_manager`, `accountant`) must enroll before using the system. The first password login returns `mfa_setup_required: true` and a restricted session; call `/auth/mfa/setup`, add the secret/URI to an authenticator, then POST `{"code":"123456"}` to `/auth/mfa/confirm`. Enrolled users must provide a fresh TOTP code at login. Codes are single-use by time counter. Successful login sets an HttpOnly session cookie; passwords and raw TOTP secrets are never returned by user-directory APIs. The setup secret is returned only to the authenticated user during enrollment and is encrypted in the database with `MFA_ENCRYPTION_KEY`.
 
 ## 3. CRM and Sales
 

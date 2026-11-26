@@ -12,3 +12,9 @@ backups
 deploy/tls
 node_modules
 tests
+docs
+infra
+deploy
+migrations
+scripts
+.github

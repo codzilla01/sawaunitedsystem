@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from app.production import validate_production
 
 
@@ -9,6 +10,11 @@ def production_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:password@db/sawa")
     monkeypatch.setenv("COOKIE_SECURE", "true")
     monkeypatch.setenv("PUBLIC_ORIGIN", "https://sawa.example.com")
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("S3_BUCKET", "private-test")
+    monkeypatch.setenv("S3_REGION", "eu-west-1")
+    monkeypatch.setenv("DOCUMENT_SCANNER_URL", "https://scanner.example/scan")
+    monkeypatch.setenv("DOCUMENT_SCANNER_TOKEN", "test-scanner-token")
 
 
 def test_valid_production_settings(production_env):
@@ -22,6 +28,11 @@ def test_valid_production_settings(production_env):
     ("COOKIE_SECURE", "false"),
     ("PUBLIC_ORIGIN", "http://example.com"),
     ("PUBLIC_ORIGIN", "https://example.com/path"),
+    ("MFA_ENCRYPTION_KEY", "invalid-key"),
+    ("DOCUMENT_SCANNER_URL", "http://scanner.example/scan"),
+    ("DOCUMENT_SCANNER_URL", "https://scanner.example/scan?token=secret"),
+    ("S3_ENDPOINT_URL", "http://s3.example"),
+    ("S3_ENDPOINT_URL", "https://s3.example?token=secret"),
 ])
 def test_unsafe_production_settings_rejected(production_env, monkeypatch, key, value):
     monkeypatch.setenv(key, value)
@@ -30,10 +41,11 @@ def test_unsafe_production_settings_rejected(production_env, monkeypatch, key, v
 
 
 def test_security_headers_and_readiness(client):
-    response = client.get("/ready")
+    response = client.get("/ready", headers={"X-Request-ID": "uat-request-42"})
     assert response.status_code == 200
     assert response.headers["x-content-type-options"] == "nosniff"
     assert "object-src 'none'" in response.headers["content-security-policy"]
+    assert response.headers["x-request-id"] == "uat-request-42"
 
 
 def test_production_csrf(client, monkeypatch):
@@ -73,12 +85,10 @@ def test_vercel_requires_external_storage_and_tls(production_env, monkeypatch):
     with pytest.raises(RuntimeError, match="TLS"):
         validate_production()
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db/sawa?sslmode=require")
-    with pytest.raises(RuntimeError, match="storage"):
+    monkeypatch.delenv("S3_BUCKET")
+    with pytest.raises(RuntimeError, match="S3"):
         validate_production()
-    for key in ("S3_BUCKET", "S3_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCUMENT_SCANNER_TOKEN"):
+    monkeypatch.setenv("S3_BUCKET", "private-test")
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
         monkeypatch.setenv(key, "test-only")
-    monkeypatch.setenv("DOCUMENT_SCANNER_URL", "https://scanner.example/scan")
     validate_production()
-    monkeypatch.setenv("DOCUMENT_SCANNER_URL", "http://scanner.example/scan")
-    with pytest.raises(RuntimeError, match="HTTPS"):
-        validate_production()

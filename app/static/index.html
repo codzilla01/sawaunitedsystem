@@ -17,11 +17,26 @@
       <div class="eyebrow">SAWA UNITED GROUP</div>
       <h1>تسجيل الدخول</h1>
       <p>منصة إدارة الأعمال والعقود والعمليات</p>
-      <label>البريد الإلكتروني<input name="email" type="email" value="admin@sawa.local" required autocomplete="username"></label>
+      <label>البريد الإلكتروني<input name="email" type="email" placeholder="name@example.com" required autocomplete="username"></label>
       <label>كلمة المرور<input name="password" type="password" required autocomplete="current-password"></label>
+      <label>رمز المصادقة الثنائية (إن كان مفعّلًا)<input name="mfa_code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,8}" maxlength="8"></label>
       <button class="btn primary full" type="submit">دخول إلى النظام</button>
       <div id="login-error" class="error-text"></div>
     </form>
+    <section id="mfa-setup-card" class="login-card hidden" aria-labelledby="mfa-setup-title">
+      <div class="brand-mark">S</div>
+      <div class="eyebrow">SECURITY SETUP</div>
+      <h1 id="mfa-setup-title">تفعيل المصادقة الثنائية</h1>
+      <p>أضف المفتاح إلى تطبيق مصادقة، ثم أدخل الرمز المكوّن من 6 أرقام.</p>
+      <label for="mfa-secret-display">مفتاح الإعداد — احتفظ به بسرية</label>
+      <code id="mfa-secret-display" class="mfa-secret"></code>
+      <a id="mfa-otpauth-link" class="mfa-link">فتح في تطبيق مصادقة متوافق</a>
+      <form id="mfa-confirm-form">
+        <label for="mfa-confirm-code">رمز التحقق<input id="mfa-confirm-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,8}" minlength="6" maxlength="8" required></label>
+        <button class="btn primary full" type="submit">تأكيد التفعيل</button>
+        <div id="mfa-setup-error" class="error-text" role="alert"></div>
+      </form>
+    </section>
   </div>
   <div id="app-shell" class="shell hidden">
     <aside class="sidebar">
