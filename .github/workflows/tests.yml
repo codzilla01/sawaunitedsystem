@@ -52,7 +52,20 @@ jobs:
           TEST_POSTGRES_URL: postgresql+psycopg://sawa_test:ci-only-password@localhost:5432/sawa_test
           BOOTSTRAP_ADMIN_EMAIL: admin@ci.example
           BOOTSTRAP_ADMIN_PASSWORD: ci-only-bootstrap-password-long
-        run: python -m pytest -q tests/test_postgres_integration.py
+        run: |
+          set +e
+          python -m pytest -q tests/test_postgres_integration.py > /tmp/postgres-integration.log 2>&1
+          test_status=$?
+          cat /tmp/postgres-integration.log
+          if [ "$test_status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          for line in Path('/tmp/postgres-integration.log').read_text(errors='replace').splitlines()[-30:]:
+              safe = line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print(f'::error::{safe}')
+          PY
+          fi
+          exit "$test_status"
       - name: Production startup smoke test against migrated PostgreSQL
         env:
           APP_ENV: production
