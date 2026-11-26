@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.env.*
+__pycache__
+.pytest_cache
+*.db
+*.db-shm
+*.db-wal
+private_uploads
+backups
+deploy/tls
+node_modules

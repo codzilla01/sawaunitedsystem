@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+private_uploads/
+backups/
+node_modules/
+
+deploy/tls/
+
+.vercel/

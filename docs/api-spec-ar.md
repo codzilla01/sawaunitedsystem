@@ -167,7 +167,7 @@ A booking includes car/customer, start/end timestamps, currency, total, and depo
 | GET | `/documents/{id}/download` | Download private file | Authenticated + scope |
 | GET | `/audit-logs?limit=100` | Inspect audit history | Super Admin / Group Manager |
 
-Document upload uses multipart fields: `file`, `entity_type`, `entity_id`, optional `business_unit_code`. Allowed formats: PDF, JPEG, PNG, WEBP, DOCX, XLSX. Maximum size: 15 MB. Production must add antivirus inspection and private object storage.
+Document upload uses multipart fields: `file`, `entity_type`, `entity_id`, optional `business_unit_code`. Allowed formats: PDF, JPEG, PNG, WEBP, DOCX, XLSX. Maximum size: 15 MB. On Vercel the limit is 3 MiB; production uses private S3 storage and requires a trusted HTTPS malware scanner. Supported entity types are party and contract and the referenced record must exist. GET /documents returns scoped metadata.
 
 ## 9. Error example
 

@@ -1,0 +1,43 @@
+name: Application checks
+on: [push, pull_request]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sawa_test
+          POSTGRES_USER: sawa_test
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sawa_test -d sawa_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: pip install -r requirements.lock
+      - run: python -m pytest -q
+      - name: Apply initial PostgreSQL migration
+        env:
+          PGPASSWORD: ci-only-password
+        run: psql -h localhost -U sawa_test -d sawa_test -v ON_ERROR_STOP=1 --single-transaction -f migrations/0001_initial_postgresql.sql
+      - name: Apply shared login limit migration
+        env:
+          PGPASSWORD: ci-only-password
+        run: psql -h localhost -U sawa_test -d sawa_test -v ON_ERROR_STOP=1 --single-transaction -f migrations/0002_login_budgets.sql
+      - name: Production startup smoke test
+        env:
+          APP_ENV: production
+          DATABASE_URL: postgresql+psycopg://sawa_test:ci-only-password@localhost:5432/sawa_test
+          SECRET_KEY: ci-only-secret-not-for-deployment-012345678901234567890123456789
+          BOOTSTRAP_ADMIN_EMAIL: admin@ci.example
+          BOOTSTRAP_ADMIN_PASSWORD: ci-only-admin-password-not-for-deployment
+          COOKIE_SECURE: 'true'
+          PUBLIC_ORIGIN: https://ci.example
+        run: python -c "from app.main import startup; startup(initialize=True); startup()"
