@@ -4,7 +4,7 @@
 
 آخر تشغيل لهذه النسخة من المستودع: **45 passed, 5 skipped, 1 warning** على Python 3.11 وSQLite. الاختبارات الخمسة المتخطاة هي اختبارات PostgreSQL الفعلية في `tests/test_postgres_integration.py`؛ تحتاج `TEST_POSTGRES_URL` بعد تطبيق migrations. ظهر تحذير deprecation من `starlette.testclient` مع httpx، ولم يمنع النجاح. فحص `python -m compileall -q app api scripts tests` نجح.
 
-> **هذا ليس تقرير قبول الاستعادة أو staging.** لا يتوفر Docker أو PostgreSQL محليًا. على GitHub Actions للـcommit `0cb72da` نجحت اختبارات SQLite وmigrations `0001`–`0003` واختبارات PostgreSQL للتزامن والصلاحيات وفحص بدء الإنتاج. خطوة backup/restore فشلت لأن نسخة `pg_restore` الأحدث من PostgreSQL 16 استخدمت `SET transaction_timeout` غير المدعوم على الخادم؛ عُدّل CI لاستخدام أدوات العميل من حاوية PostgreSQL 16، ونتيجة rerun على `a77e5d0` بانتظار الاكتمال. لا توجد نتيجة استعادة ناجحة بعد. فشل كذلك فحص Vercel Preview التلقائي للـcommits المنشورة، ولا تعتبر أي من الحالتين نشرًا ناجحًا.
+> **هذا ليس قبول staging أو تجربة استعادة خارج CI.** لا يتوفر Docker أو PostgreSQL محليًا، لكن GitHub Actions على commit `5f557a8` نجح بالكامل باستخدام PostgreSQL 16: migrations `0001`–`0003`، اختبارات SQLite وPostgreSQL للتزامن والصلاحيات، فحص بدء الإنتاج، و`pg_dump`/`pg_restore` إلى قاعدة منفصلة فارغة. احتاج CI إلى تثبيت أدوات النسخ/الاستعادة على نسخة PostgreSQL 16 بعد أن استخدم إصدار أحدث إعداد `transaction_timeout` غير مدعوم من الخادم. فشل فحص Vercel Preview التلقائي للـcommits المنشورة، لذا لا يوجد نشر staging ناجح حتى الآن.
 
 ## نطاق الاختبارات المضافة/الموجودة
 
