@@ -1,0 +1,12 @@
+{
+  "name": "sawa_united_system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SAWA UNITED business management system — FastAPI backend and Arabic web interface",
+  "scripts": {
+    "setup": "python -m pip install -r requirements.txt",
+    "dev": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
+    "start": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "test": "python -m pytest -q"
+  }
+}
